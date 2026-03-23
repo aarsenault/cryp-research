@@ -79,29 +79,31 @@ async function fetchBlockchainChunks(startDate, endDate) {
   return allEntries;
 }
 
-async function fetchRecentFromCoinGecko() {
-  console.log("  Fetching recent data from CoinGecko (last 30 days)...");
-  const url = `${COINGECKO_URL}?vs_currency=usd&days=30&interval=daily`;
+async function fetchCoinGeckoDaily(days) {
+  console.log(`  Fetching last ${days} days from CoinGecko (daily close)...`);
+  const url = `${COINGECKO_URL}?vs_currency=usd&days=${days}&interval=daily`;
   const data = await fetchWithRetry(url);
   if (data.prices?.length > 0) {
     const entries = parseCoinGeckoData(data.prices);
-    console.log(`    Got ${entries.length} recent data points`);
+    console.log(`    Got ${entries.length} daily data points from CoinGecko`);
     return entries;
   }
   return [];
 }
 
-function mergeEntries(existing, newEntries) {
-  const dateSet = new Set(existing.map((e) => e.date));
-  const merged = [...existing];
-  for (const entry of newEntries) {
-    if (!dateSet.has(entry.date)) {
-      merged.push(entry);
-      dateSet.add(entry.date);
-    }
+// Merge two arrays, with "priority" entries overwriting "base" for same dates
+function mergeWithPriority(base, priority) {
+  const dateMap = new Map();
+  for (const entry of base) {
+    dateMap.set(entry.date, entry);
   }
-  merged.sort((a, b) => a.date.localeCompare(b.date));
-  return merged;
+  // Priority overwrites base for the same date
+  for (const entry of priority) {
+    dateMap.set(entry.date, entry);
+  }
+  return Array.from(dateMap.values()).sort((a, b) =>
+    a.date.localeCompare(b.date),
+  );
 }
 
 function checkGaps(entries) {
@@ -118,10 +120,15 @@ function checkGaps(entries) {
 
 async function main() {
   mkdirSync(DATA_DIR, { recursive: true });
+
+  // Always refetch CoinGecko data (365 days) to fix blockchain.info inaccuracies
+  // Blockchain.info is only used for data older than 365 days
+  const forceRefresh = process.argv.includes("--force");
+
   let existing = [];
   let lastDate = "2011-01-01";
 
-  if (existsSync(DATA_FILE)) {
+  if (!forceRefresh && existsSync(DATA_FILE)) {
     try {
       existing = JSON.parse(readFileSync(DATA_FILE, "utf-8"));
       if (existing.length > 0) {
@@ -133,48 +140,66 @@ async function main() {
       existing = [];
       lastDate = "2011-01-01";
     }
+  } else if (forceRefresh) {
+    console.log("Force refresh: rebuilding entire cache...");
   } else {
     console.log("No cache found, fetching full history...");
   }
 
   const today = new Date().toISOString().split("T")[0];
-  const nextDay = new Date(lastDate + "T00:00:00Z");
-  nextDay.setUTCDate(nextDay.getUTCDate() + 1);
-  const startDate = nextDay.toISOString().split("T")[0];
 
-  if (startDate > today) {
-    console.log("Cache is up to date.");
-    return;
-  }
+  // Step 1: Fetch old data from blockchain.info if needed
+  const cutoffDate = new Date();
+  cutoffDate.setUTCDate(cutoffDate.getUTCDate() - 365);
+  const cutoff = cutoffDate.toISOString().split("T")[0];
 
-  console.log(`Fetching from ${startDate} to ${today}...`);
-
-  // Fetch historical data from blockchain.info (1-year chunks, daily granularity)
-  console.log("Fetching from blockchain.info...");
-  const blockchainEntries = await fetchBlockchainChunks(startDate, today);
-
-  // Supplement with CoinGecko for the most recent days (blockchain.info can lag a few days)
-  let recentEntries = [];
-  try {
-    await new Promise((r) => setTimeout(r, CHUNK_DELAY_MS));
-    recentEntries = await fetchRecentFromCoinGecko();
-  } catch (err) {
-    console.warn(
-      `CoinGecko supplemental fetch failed (non-fatal): ${err.message}`,
+  let blockchainEntries = [];
+  if (lastDate < cutoff || forceRefresh) {
+    const fetchStart = forceRefresh ? "2011-01-01" : lastDate;
+    console.log(
+      `Fetching historical data from blockchain.info (${fetchStart} to ${cutoff})...`,
+    );
+    blockchainEntries = await fetchBlockchainChunks(fetchStart, cutoff);
+    // Filter to only dates before the CoinGecko cutoff
+    blockchainEntries = blockchainEntries.filter(
+      (e) => e.date <= cutoff && e.date > (forceRefresh ? "2010-01-01" : lastDate),
     );
   }
 
-  const allNew = mergeEntries(blockchainEntries, recentEntries);
-  // Filter to only entries after lastDate
-  const filtered = allNew.filter((e) => e.date > lastDate && e.date <= today);
+  // Step 2: Fetch last 365 days from CoinGecko (accurate daily close prices)
+  let coinGeckoEntries = [];
+  try {
+    await new Promise((r) => setTimeout(r, CHUNK_DELAY_MS));
+    coinGeckoEntries = await fetchCoinGeckoDaily(365);
+  } catch (err) {
+    console.warn(`CoinGecko fetch failed: ${err.message}`);
+    console.warn("Falling back to blockchain.info for recent data too");
+    // Fallback: fetch recent from blockchain.info
+    const recentBlockchain = await fetchBlockchainChunks(cutoff, today);
+    blockchainEntries.push(
+      ...recentBlockchain.filter((e) => e.date > cutoff),
+    );
+  }
 
-  if (filtered.length === 0) {
-    console.log("No new data returned.");
+  // Step 3: Merge — CoinGecko takes priority over blockchain.info for overlapping dates
+  // For existing cache, CoinGecko also takes priority (fixes old bad data)
+  let merged;
+  if (forceRefresh) {
+    // Start fresh: blockchain for old, CoinGecko for recent
+    merged = mergeWithPriority(blockchainEntries, coinGeckoEntries);
+  } else {
+    // Incremental: start with cache, add new blockchain data, overlay CoinGecko
+    const withBlockchain = mergeWithPriority(existing, blockchainEntries);
+    merged = mergeWithPriority(withBlockchain, coinGeckoEntries);
+  }
+
+  merged = merged.filter((e) => e.date <= today);
+
+  if (merged.length === 0) {
+    console.log("No data available.");
     return;
   }
 
-  console.log(`Fetched ${filtered.length} new daily entries`);
-  const merged = mergeEntries(existing, filtered);
   checkGaps(merged);
 
   writeFileSync(DATA_FILE, JSON.stringify(merged, null, 2));

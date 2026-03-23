@@ -1,8 +1,12 @@
 import { CHART_CONFIG } from "./config.js";
 
+// Compute mean and standard deviation bands across visible completed cycles.
+// Excludes 2011 cycle from SD calculation (too early/illiquid).
+// At each day offset N, computes the mean value across cycles, then the
+// standard deviation of how far each cycle deviates from that mean.
 export function computeStats(cycles, valueKey) {
   const completedCycles = cycles.filter(
-    (c) => c.visible && c.isComplete
+    (c) => c.visible && c.isComplete && c.name !== "2011",
   );
 
   if (completedCycles.length < CHART_CONFIG.minCyclesForSD) {
@@ -10,7 +14,7 @@ export function computeStats(cycles, valueKey) {
   }
 
   const maxDay = Math.max(
-    ...completedCycles.map((c) => c.points[c.points.length - 1].day)
+    ...completedCycles.map((c) => c.points[c.points.length - 1].day),
   );
 
   const mean = [];
@@ -29,9 +33,13 @@ export function computeStats(cycles, valueKey) {
 
     if (values.length < CHART_CONFIG.minCyclesForSD) continue;
 
-    const avg = values.reduce((s, v) => s + v, 0) / values.length;
+    const n = values.length;
+    const avg = values.reduce((s, v) => s + v, 0) / n;
+    // Sample standard deviation (Bessel's correction) for small sample sizes
     const variance =
-      values.reduce((s, v) => s + (v - avg) ** 2, 0) / values.length;
+      n > 1
+        ? values.reduce((s, v) => s + (v - avg) ** 2, 0) / (n - 1)
+        : 0;
     const sd = Math.sqrt(variance);
 
     mean.push({ day, value: avg });
