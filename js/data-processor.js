@@ -26,6 +26,17 @@ function findBottom(prices, fromIndex, toIndex) {
   return minIndex;
 }
 
+// Find where price first recovers back to ATH after the bottom
+function findRecoveryIndex(prices, athIndex, athPrice, maxIndex) {
+  // First find the bottom
+  const bottomIdx = findBottom(prices, athIndex, maxIndex);
+  // Then find first day after bottom where price >= ATH
+  for (let i = bottomIdx + 1; i <= maxIndex; i++) {
+    if (prices[i].close >= athPrice) return i;
+  }
+  return maxIndex; // never recovered within range
+}
+
 export function buildBearCycles(prices) {
   const cycles = [];
   for (let i = 0; i < CYCLES.length; i++) {
@@ -33,11 +44,20 @@ export function buildBearCycles(prices) {
     const athIndex = findDateIndex(prices, cycle.athDate);
     const athPrice = prices[athIndex].close;
 
-    let endIndex;
+    // Max boundary: next cycle's ATH or end of data
+    let maxIndex;
     if (i < CYCLES.length - 1) {
-      endIndex = findDateIndex(prices, CYCLES[i + 1].athDate);
+      maxIndex = findDateIndex(prices, CYCLES[i + 1].athDate);
     } else {
-      endIndex = prices.length - 1;
+      maxIndex = prices.length - 1;
+    }
+
+    // Bear cycle ends when price recovers to ATH (or at max boundary for current cycle)
+    let endIndex;
+    if (cycle.isCurrent) {
+      endIndex = maxIndex;
+    } else {
+      endIndex = findRecoveryIndex(prices, athIndex, athPrice, maxIndex);
     }
 
     const points = [];

@@ -39,17 +39,17 @@ async function init() {
   function renderAll() {
     const bearValueKey =
       currentMode === "percentage" ? "drawdownPct" : "normalized";
-    const bullValueKey =
-      currentMode === "percentage" ? "gainPct" : "normalized";
+    // Log scale requires positive values — force normalized for bull chart when log is on
+    const bullUseNormalized = logScale || currentMode === "normalized";
+    const bullValueKey = bullUseNormalized ? "normalized" : "gainPct";
 
     const bearFormatValue =
       currentMode === "percentage"
         ? (v) => `${v.toFixed(1)}%`
         : (v) => v.toFixed(3);
-    const bullFormatValue =
-      currentMode === "percentage"
-        ? (v) => `${v.toFixed(1)}%`
-        : (v) => v.toFixed(2);
+    const bullFormatValue = bullUseNormalized
+      ? (v) => `${v.toFixed(1)}x`
+      : (v) => `${v.toFixed(1)}%`;
 
     const bearStats = computeStats(bearCycles, bearValueKey);
     const bullStats = computeStats(bullCycles, bullValueKey);
@@ -68,10 +68,9 @@ async function init() {
     bullChart.render(bullCycles, bullStats, {
       valueKey: bullValueKey,
       formatValue: bullFormatValue,
-      yLabel:
-        currentMode === "percentage"
-          ? "% Gain From Bottom"
-          : "Price / Bottom",
+      yLabel: bullUseNormalized
+        ? "Multiple From Bottom"
+        : "% Gain From Bottom",
       logScale,
     });
     bullChart.showSD(currentSDLevel);

@@ -112,10 +112,12 @@ export function createChart(containerId, { title, xLabel }) {
 
     xScale.domain([0, maxDay]);
 
-    if (logScale && yMin > 0) {
+    if (logScale) {
+      // Clamp to positive values for log scale
+      const logMin = Math.max(yMin, 0.5);
       yScale = d3
         .scaleLog()
-        .domain([Math.max(yMin * 0.9, 0.01), yMax * 1.1])
+        .domain([logMin * 0.9, yMax * 1.1])
         .range([innerH, 0]);
     } else {
       yScale = d3
