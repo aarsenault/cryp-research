@@ -1,107 +1,116 @@
 import { CYCLES } from "./config.js";
-import {
-  loadPriceData,
-  buildBearCycles,
-  buildBullCycles,
-} from "./data-processor.js";
+import { loadPriceData, buildCycles, getCyclePoints } from "./data-processor.js";
 import { computeStats } from "./stats.js";
 import { createChart } from "./chart.js";
 import { setupControls } from "./controls.js";
 
+const RANGE_CONFIG = {
+  "top-to-bottom": {
+    title: "Bitcoin Bear Market: Top \u2192 Bottom",
+    xLabel: "Days From ATH",
+    pctValueKey: "drawdownPct",
+    pctYLabel: "% Drawdown From ATH",
+    normYLabel: "Price / ATH",
+  },
+  "bottom-to-top": {
+    title: "Bitcoin Bull Market: Bottom \u2192 Top",
+    xLabel: "Days From Cycle Bottom",
+    pctValueKey: "gainPct",
+    pctYLabel: "% Gain From Bottom",
+    normYLabel: "Multiple From Bottom",
+  },
+  "full-run": {
+    title: "Bitcoin Full Cycle: ATH \u2192 ATH",
+    xLabel: "Days From ATH",
+    pctValueKey: "drawdownPct",
+    pctYLabel: "% Drawdown From ATH",
+    normYLabel: "Price / ATH",
+  },
+};
+
 async function init() {
   const prices = await loadPriceData();
-
-  const bearCycles = buildBearCycles(prices);
-  const bullCycles = buildBullCycles(prices);
+  const allCycles = buildCycles(prices);
 
   // Set initial visibility
-  for (const bc of bearCycles) {
-    bc.visible = CYCLES.find((c) => c.name === bc.name).visibleByDefault;
-  }
-  for (const bc of bullCycles) {
-    bc.visible = CYCLES.find((c) => c.name === bc.name).visibleByDefault;
+  for (const c of allCycles) {
+    c.visible = CYCLES.find((cfg) => cfg.name === c.name).visibleByDefault;
   }
 
-  const bearChart = createChart("bear-chart", {
-    title: "Bitcoin Bear Market Comparison",
+  const chart = createChart("chart", {
+    title: "Bitcoin Bear Market: Top \u2192 Bottom",
     xLabel: "Days From ATH",
-  });
-
-  const bullChart = createChart("bull-chart", {
-    title: "Bitcoin Bull Market Comparison",
-    xLabel: "Days From Cycle Bottom",
   });
 
   let currentMode = "percentage";
   let currentSDLevel = 2;
   let logScale = false;
+  let rangeMode = "top-to-bottom";
 
-  function renderAll() {
-    const bearValueKey =
-      currentMode === "percentage" ? "drawdownPct" : "normalized";
-    // Log scale requires positive values — force normalized for bull chart when log is on
-    const bullUseNormalized = logScale || currentMode === "normalized";
-    const bullValueKey = bullUseNormalized ? "normalized" : "gainPct";
+  function renderChart() {
+    const cfg = RANGE_CONFIG[rangeMode];
 
-    const bearFormatValue =
-      currentMode === "percentage"
-        ? (v) => `${v.toFixed(1)}%`
-        : (v) => v.toFixed(3);
-    const bullFormatValue = bullUseNormalized
-      ? (v) => `${v.toFixed(1)}x`
-      : (v) => `${v.toFixed(1)}%`;
+    // Set active points on each cycle based on range mode
+    for (const c of allCycles) {
+      c.points = getCyclePoints(c, rangeMode);
+    }
 
-    const bearStats = computeStats(bearCycles, bearValueKey);
-    const bullStats = computeStats(bullCycles, bullValueKey);
+    const useNormalized = logScale || currentMode === "normalized";
+    let valueKey;
+    if (useNormalized) {
+      valueKey = "normalized";
+    } else {
+      valueKey = cfg.pctValueKey;
+    }
 
-    bearChart.render(bearCycles, bearStats, {
-      valueKey: bearValueKey,
-      formatValue: bearFormatValue,
-      yLabel:
-        currentMode === "percentage"
-          ? "% Drawdown From ATH"
-          : "Price / ATH",
-      logScale: false,
+    let formatValue;
+    if (useNormalized && rangeMode === "bottom-to-top") {
+      formatValue = (v) => `${v.toFixed(1)}x`;
+    } else if (useNormalized) {
+      formatValue = (v) => v.toFixed(3);
+    } else {
+      formatValue = (v) => `${v.toFixed(1)}%`;
+    }
+
+    const yLabel = useNormalized ? cfg.normYLabel : cfg.pctYLabel;
+
+    const stats = computeStats(allCycles, valueKey);
+
+    chart.updateTitle(cfg.title);
+    chart.updateXLabel(cfg.xLabel);
+
+    chart.render(allCycles, stats, {
+      valueKey,
+      formatValue,
+      yLabel,
+      logScale: logScale && rangeMode === "bottom-to-top",
     });
-    bearChart.showSD(currentSDLevel);
-
-    bullChart.render(bullCycles, bullStats, {
-      valueKey: bullValueKey,
-      formatValue: bullFormatValue,
-      yLabel: bullUseNormalized
-        ? "Multiple From Bottom"
-        : "% Gain From Bottom",
-      logScale,
-    });
-    bullChart.showSD(currentSDLevel);
+    chart.showSD(currentSDLevel);
   }
 
   setupControls({
-    cycles: bearCycles,
-    onToggleCycle: () => {
-      // Sync visibility between bear and bull
-      for (const bc of bearCycles) {
-        const bull = bullCycles.find((b) => b.name === bc.name);
-        if (bull) bull.visible = bc.visible;
-      }
-      renderAll();
-    },
+    cycles: allCycles,
+    onToggleCycle: () => renderChart(),
     onToggleMode: (mode) => {
       currentMode = mode;
-      renderAll();
+      renderChart();
     },
     onToggleSD: (level) => {
       currentSDLevel = level;
-      bearChart.showSD(level);
-      bullChart.showSD(level);
+      chart.showSD(level);
     },
     onToggleLog: (on) => {
       logScale = on;
-      renderAll();
+      renderChart();
+    },
+    onToggleRange: (mode) => {
+      rangeMode = mode;
+      chart.resetZoom();
+      renderChart();
     },
   });
 
-  renderAll();
+  renderChart();
 }
 
 init().catch((err) => {

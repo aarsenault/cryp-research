@@ -4,11 +4,13 @@ export function setupControls({
   onToggleMode,
   onToggleSD,
   onToggleLog,
+  onToggleRange,
 }) {
   const legendEl = document.getElementById("legend");
   const modeToggle = document.getElementById("mode-toggle");
   const sdToggle = document.getElementById("sd-toggle");
   const logToggle = document.getElementById("log-toggle");
+  const rangeToggle = document.getElementById("range-toggle");
 
   // Build clickable legend
   legendEl.textContent = "";
@@ -57,7 +59,7 @@ export function setupControls({
     onToggleSD(sdLevel);
   });
 
-  // Log scale toggle (Chart 2 only)
+  // Log scale toggle
   let logOn = false;
   logToggle.textContent = "Scale: Linear";
   logToggle.addEventListener("click", () => {
@@ -66,5 +68,24 @@ export function setupControls({
     onToggleLog(logOn);
   });
 
-  return { getMode: () => mode, getSDLevel: () => sdLevel };
+  // Range mode toggle: Top→Bottom -> Bottom→Top -> Full Run
+  let rangeIdx = 0;
+  const rangeModes = ["top-to-bottom", "bottom-to-top", "full-run"];
+  const rangeLabels = [
+    "Range: Top \u2192 Bottom",
+    "Range: Bottom \u2192 Top",
+    "Range: Full Run",
+  ];
+  rangeToggle.textContent = rangeLabels[rangeIdx];
+  rangeToggle.addEventListener("click", () => {
+    rangeIdx = (rangeIdx + 1) % 3;
+    rangeToggle.textContent = rangeLabels[rangeIdx];
+    onToggleRange(rangeModes[rangeIdx]);
+  });
+
+  return {
+    getMode: () => mode,
+    getSDLevel: () => sdLevel,
+    getRangeMode: () => rangeModes[rangeIdx],
+  };
 }

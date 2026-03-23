@@ -26,18 +26,16 @@ function findBottom(prices, fromIndex, toIndex) {
   return minIndex;
 }
 
-// Find where price first recovers back to ATH after the bottom
 function findRecoveryIndex(prices, athIndex, athPrice, maxIndex) {
-  // First find the bottom
   const bottomIdx = findBottom(prices, athIndex, maxIndex);
-  // Then find first day after bottom where price >= ATH
   for (let i = bottomIdx + 1; i <= maxIndex; i++) {
     if (prices[i].close >= athPrice) return i;
   }
-  return maxIndex; // never recovered within range
+  return maxIndex;
 }
 
-export function buildBearCycles(prices) {
+// Build cycle data with all segments pre-computed for each range mode
+export function buildCycles(prices) {
   const cycles = [];
   for (let i = 0; i < CYCLES.length; i++) {
     const cycle = CYCLES[i];
@@ -52,55 +50,83 @@ export function buildBearCycles(prices) {
       maxIndex = prices.length - 1;
     }
 
-    // Bear cycle ends when price recovers to ATH (or at max boundary for current cycle)
-    let endIndex;
-    if (cycle.isCurrent) {
-      endIndex = maxIndex;
-    } else {
-      endIndex = findRecoveryIndex(prices, athIndex, athPrice, maxIndex);
-    }
+    const bottomIndex = findBottom(prices, athIndex, maxIndex);
+    const bottomPrice = prices[bottomIndex].close;
 
-    const points = [];
-    for (let j = athIndex; j <= endIndex; j++) {
+    const recoveryIndex = cycle.isCurrent
+      ? maxIndex
+      : findRecoveryIndex(prices, athIndex, athPrice, maxIndex);
+
+    // Pre-compute points for each range mode:
+
+    // "top-to-bottom": ATH → cycle bottom
+    const topToBottom = [];
+    for (let j = athIndex; j <= bottomIndex; j++) {
       const day = j - athIndex;
-      const drawdownPct = ((prices[j].close - athPrice) / athPrice) * 100;
-      const normalized = prices[j].close / athPrice;
-      points.push({ day, drawdownPct, normalized, price: prices[j].close, date: prices[j].date });
+      topToBottom.push({
+        day,
+        drawdownPct: ((prices[j].close - athPrice) / athPrice) * 100,
+        normalized: prices[j].close / athPrice,
+        price: prices[j].close,
+        date: prices[j].date,
+      });
     }
 
-    cycles.push({ ...cycle, athPrice, athIndex, endIndex, points, isComplete: !cycle.isCurrent });
+    // "bottom-to-top": bottom → recovery to ATH (or next ATH / current)
+    const bottomToTop = [];
+    const btEnd = cycle.isCurrent ? maxIndex : recoveryIndex;
+    for (let j = bottomIndex; j <= btEnd; j++) {
+      const day = j - bottomIndex;
+      bottomToTop.push({
+        day,
+        gainPct: ((prices[j].close - bottomPrice) / bottomPrice) * 100,
+        normalized: prices[j].close / bottomPrice,
+        price: prices[j].close,
+        date: prices[j].date,
+      });
+    }
+
+    // "full-run": ATH → next ATH (full cycle)
+    const fullRun = [];
+    for (let j = athIndex; j <= maxIndex; j++) {
+      const day = j - athIndex;
+      fullRun.push({
+        day,
+        drawdownPct: ((prices[j].close - athPrice) / athPrice) * 100,
+        normalized: prices[j].close / athPrice,
+        price: prices[j].close,
+        date: prices[j].date,
+      });
+    }
+
+    cycles.push({
+      ...cycle,
+      athPrice,
+      athIndex,
+      bottomPrice,
+      bottomIndex,
+      bottomDate: prices[bottomIndex].date,
+      recoveryIndex,
+      maxIndex,
+      topToBottom,
+      bottomToTop,
+      fullRun,
+      isComplete: !cycle.isCurrent,
+    });
   }
   return cycles;
 }
 
-export function buildBullCycles(prices) {
-  const cycles = [];
-  for (let i = 0; i < CYCLES.length; i++) {
-    const cycle = CYCLES[i];
-    const athIndex = findDateIndex(prices, cycle.athDate);
-
-    let endIndex;
-    if (i < CYCLES.length - 1) {
-      endIndex = findDateIndex(prices, CYCLES[i + 1].athDate);
-    } else {
-      endIndex = prices.length - 1;
-    }
-
-    const bottomIndex = findBottom(prices, athIndex, endIndex);
-    const bottomPrice = prices[bottomIndex].close;
-
-    const points = [];
-    for (let j = bottomIndex; j <= endIndex; j++) {
-      const day = j - bottomIndex;
-      const gainPct = ((prices[j].close - bottomPrice) / bottomPrice) * 100;
-      const normalized = prices[j].close / bottomPrice;
-      points.push({ day, gainPct, normalized, price: prices[j].close, date: prices[j].date });
-    }
-
-    cycles.push({
-      ...cycle, bottomPrice, bottomIndex, bottomDate: prices[bottomIndex].date,
-      endIndex, points, isComplete: !cycle.isCurrent,
-    });
+// Get the active points array for a cycle given the current range mode
+export function getCyclePoints(cycle, rangeMode) {
+  switch (rangeMode) {
+    case "top-to-bottom":
+      return cycle.topToBottom;
+    case "bottom-to-top":
+      return cycle.bottomToTop;
+    case "full-run":
+      return cycle.fullRun;
+    default:
+      return cycle.topToBottom;
   }
-  return cycles;
 }

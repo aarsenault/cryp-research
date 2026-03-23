@@ -8,11 +8,22 @@ export function createChart(containerId, { title, xLabel }) {
   const innerW = width - margin.left - margin.right;
   const innerH = height - margin.top - margin.bottom;
 
+  // Clip path to contain chart content during zoom
+  const clipId = `clip-${containerId}`;
+
   const svg = d3
     .select(`#${containerId}`)
     .append("svg")
     .attr("width", width)
     .attr("height", height);
+
+  svg
+    .append("defs")
+    .append("clipPath")
+    .attr("id", clipId)
+    .append("rect")
+    .attr("width", innerW)
+    .attr("height", innerH);
 
   const g = svg
     .append("g")
@@ -20,6 +31,10 @@ export function createChart(containerId, { title, xLabel }) {
 
   const xScale = d3.scaleLinear().range([0, innerW]);
   let yScale = d3.scaleLinear().range([innerH, 0]);
+
+  // Store full domains for zoom reset
+  let fullXDomain = [0, 100];
+  let fullYDomain = [0, 1];
 
   const xGrid = g
     .append("g")
@@ -33,7 +48,7 @@ export function createChart(containerId, { title, xLabel }) {
     .attr("transform", `translate(0,${innerH})`);
   const yAxisG = g.append("g").attr("class", "axis y-axis");
 
-  svg
+  const xLabelEl = svg
     .append("text")
     .attr("class", "axis-label")
     .attr("x", margin.left + innerW / 2)
@@ -49,7 +64,7 @@ export function createChart(containerId, { title, xLabel }) {
     .attr("y", 15)
     .attr("text-anchor", "middle");
 
-  svg
+  const titleEl = svg
     .append("text")
     .attr("class", "chart-title")
     .attr("x", margin.left + innerW / 2)
@@ -57,12 +72,15 @@ export function createChart(containerId, { title, xLabel }) {
     .attr("text-anchor", "middle")
     .text(title);
 
-  const bandGroup = g.append("g").attr("class", "bands");
+  // Clipped content group
+  const clippedG = g.append("g").attr("clip-path", `url(#${clipId})`);
+
+  const bandGroup = clippedG.append("g").attr("class", "bands");
   const sd2Area = bandGroup.append("path").attr("class", "sd2-band");
   const sd1Area = bandGroup.append("path").attr("class", "sd1-band");
   const meanLinePath = bandGroup.append("path").attr("class", "mean-line");
 
-  const linesGroup = g.append("g").attr("class", "cycle-lines");
+  const linesGroup = clippedG.append("g").attr("class", "cycle-lines");
 
   const crosshair = g
     .append("line")
@@ -77,6 +95,18 @@ export function createChart(containerId, { title, xLabel }) {
     .attr("class", "tooltip")
     .style("display", "none");
 
+  // Brush for zoom
+  const brush = d3
+    .brushX()
+    .extent([
+      [0, 0],
+      [innerW, innerH],
+    ])
+    .on("end", brushed);
+
+  const brushG = g.append("g").attr("class", "brush").call(brush);
+
+  // Overlay for hover (on top of brush)
   const overlay = g
     .append("rect")
     .attr("class", "overlay")
@@ -86,34 +116,67 @@ export function createChart(containerId, { title, xLabel }) {
     .style("pointer-events", "all");
 
   let currentSDLevel = 2;
+  let lastRenderArgs = null;
+  let isZoomed = false;
 
-  function render(cycles, stats, { valueKey, formatValue, yLabel, logScale }) {
+  function brushed(event) {
+    if (!event.selection) return;
+    const [x0, x1] = event.selection;
+    const newXMin = xScale.invert(x0);
+    const newXMax = xScale.invert(x1);
+
+    // Clear the brush visual
+    brushG.call(brush.move, null);
+
+    // Zoom the x-axis
+    xScale.domain([newXMin, newXMax]);
+    isZoomed = true;
+
+    // Recompute y-domain for visible data in the zoomed x-range
+    if (lastRenderArgs) {
+      updateAxesAndRedraw(lastRenderArgs);
+    }
+  }
+
+  function resetZoom() {
+    if (!isZoomed) return;
+    xScale.domain(fullXDomain);
+    isZoomed = false;
+    if (lastRenderArgs) {
+      updateAxesAndRedraw(lastRenderArgs);
+    }
+  }
+
+  // Double-click to reset zoom
+  overlay.on("dblclick", resetZoom);
+
+  function updateAxesAndRedraw({ cycles, stats, valueKey, formatValue, logScale }) {
     const visibleCycles = cycles.filter((c) => c.visible);
+    const [xMin, xMax] = xScale.domain();
 
-    yLabelEl.text(yLabel);
-
-    const maxDay = visibleCycles.length > 0
-      ? Math.max(...visibleCycles.map((c) => c.points[c.points.length - 1].day))
-      : 100;
-
-    let allValues = visibleCycles.flatMap((c) =>
-      c.points.map((p) => p[valueKey])
-    );
+    // Compute y-domain from visible data within the x-range
+    let allValues = [];
+    for (const cycle of visibleCycles) {
+      for (const pt of cycle.points) {
+        if (pt.day >= xMin && pt.day <= xMax) {
+          allValues.push(pt[valueKey]);
+        }
+      }
+    }
     if (stats) {
-      allValues = allValues.concat(
-        stats.sd2Upper.map((p) => p.value),
-        stats.sd2Lower.map((p) => p.value)
-      );
+      for (const pt of stats.sd2Upper) {
+        if (pt.day >= xMin && pt.day <= xMax) allValues.push(pt.value);
+      }
+      for (const pt of stats.sd2Lower) {
+        if (pt.day >= xMin && pt.day <= xMax) allValues.push(pt.value);
+      }
     }
 
     const yMin = allValues.length > 0 ? d3.min(allValues) : 0;
     const yMax = allValues.length > 0 ? d3.max(allValues) : 1;
     const yPad = (yMax - yMin) * 0.05;
 
-    xScale.domain([0, maxDay]);
-
     if (logScale) {
-      // Clamp to positive values for log scale
       const logMin = Math.max(yMin, 0.5);
       yScale = d3
         .scaleLog()
@@ -126,6 +189,7 @@ export function createChart(containerId, { title, xLabel }) {
         .range([innerH, 0]);
     }
 
+    // Update axes
     xAxisG.call(d3.axisBottom(xScale).ticks(10));
     yAxisG.call(
       d3
@@ -133,7 +197,6 @@ export function createChart(containerId, { title, xLabel }) {
         .ticks(8)
         .tickFormat((d) => formatValue(d))
     );
-
     xGrid.call(
       d3.axisBottom(xScale).ticks(10).tickSize(-innerH).tickFormat("")
     );
@@ -141,6 +204,7 @@ export function createChart(containerId, { title, xLabel }) {
       d3.axisLeft(yScale).ticks(8).tickSize(-innerW).tickFormat("")
     );
 
+    // Redraw lines
     const line = d3
       .line()
       .x((d) => xScale(d.day))
@@ -162,14 +226,16 @@ export function createChart(containerId, { title, xLabel }) {
       .attr("fill", "none")
       .attr("opacity", 0.9);
 
-    // SD bands (separate area generators to avoid mutation issues)
+    // SD bands
     if (stats && currentSDLevel > 0) {
-      const sd1AreaGen = d3.area()
+      const sd1AreaGen = d3
+        .area()
         .x((d) => xScale(d.day))
         .y0((d) => yScale(d.lower))
         .y1((d) => yScale(d.upper));
 
-      const sd2AreaGen = d3.area()
+      const sd2AreaGen = d3
+        .area()
         .x((d) => xScale(d.day))
         .y0((d) => yScale(d.lower))
         .y1((d) => yScale(d.upper));
@@ -216,6 +282,58 @@ export function createChart(containerId, { title, xLabel }) {
       sd2Area.style("display", "none");
       meanLinePath.style("display", "none");
     }
+  }
+
+  function render(cycles, stats, { valueKey, formatValue, yLabel, logScale }) {
+    const visibleCycles = cycles.filter((c) => c.visible);
+
+    yLabelEl.text(yLabel);
+
+    const maxDay =
+      visibleCycles.length > 0
+        ? Math.max(
+            ...visibleCycles.map((c) => c.points[c.points.length - 1].day)
+          )
+        : 100;
+
+    let allValues = visibleCycles.flatMap((c) =>
+      c.points.map((p) => p[valueKey])
+    );
+    if (stats) {
+      allValues = allValues.concat(
+        stats.sd2Upper.map((p) => p.value),
+        stats.sd2Lower.map((p) => p.value)
+      );
+    }
+
+    const yMin = allValues.length > 0 ? d3.min(allValues) : 0;
+    const yMax = allValues.length > 0 ? d3.max(allValues) : 1;
+    const yPad = (yMax - yMin) * 0.05;
+
+    // Store full domains
+    fullXDomain = [0, maxDay];
+    if (!isZoomed) {
+      xScale.domain(fullXDomain);
+    }
+
+    if (logScale) {
+      const logMin = Math.max(yMin, 0.5);
+      yScale = d3
+        .scaleLog()
+        .domain([logMin * 0.9, yMax * 1.1])
+        .range([innerH, 0]);
+    } else {
+      yScale = d3
+        .scaleLinear()
+        .domain([yMin - yPad, yMax + yPad])
+        .range([innerH, 0]);
+    }
+    fullYDomain = yScale.domain();
+
+    // Cache render args for zoom updates
+    lastRenderArgs = { cycles, stats, valueKey, formatValue, logScale };
+
+    updateAxesAndRedraw(lastRenderArgs);
 
     // Hover behavior
     overlay
@@ -262,5 +380,13 @@ export function createChart(containerId, { title, xLabel }) {
     meanLinePath.style("display", level >= 1 ? null : "none");
   }
 
-  return { render, showSD };
+  function updateTitle(newTitle) {
+    titleEl.text(newTitle);
+  }
+
+  function updateXLabel(label) {
+    xLabelEl.text(label);
+  }
+
+  return { render, showSD, resetZoom, updateTitle, updateXLabel };
 }
