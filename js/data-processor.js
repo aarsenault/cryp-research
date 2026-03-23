@@ -59,9 +59,10 @@ export function buildCycles(prices) {
 
     // Pre-compute points for each range mode:
 
-    // "top-to-bottom": ATH → cycle bottom
+    // "top-to-bottom": ATH → cycle bottom (current cycle extends to today)
+    const ttbEnd = cycle.isCurrent ? maxIndex : bottomIndex;
     const topToBottom = [];
-    for (let j = athIndex; j <= bottomIndex; j++) {
+    for (let j = athIndex; j <= ttbEnd; j++) {
       const day = j - athIndex;
       topToBottom.push({
         day,
