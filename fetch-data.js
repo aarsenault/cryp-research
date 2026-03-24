@@ -4,6 +4,8 @@ const DATA_DIR = "data";
 const DATA_FILE = `${DATA_DIR}/btc-daily.json`;
 const BINANCE_URL = "https://api.binance.com/api/v3/klines";
 const BLOCKCHAIN_URL = "https://api.blockchain.info/charts/market-price";
+const COINGECKO_URL =
+  "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart";
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 2000;
 const CHUNK_DELAY_MS = 500;
@@ -31,6 +33,17 @@ async function fetchWithRetry(url, retries = MAX_RETRIES) {
 
 function toUTCDate(timestampMs) {
   return new Date(timestampMs).toISOString().split("T")[0];
+}
+
+function parseCoinGeckoData(prices) {
+  const byDate = new Map();
+  for (const [tsMs, price] of prices) {
+    const date = toUTCDate(tsMs);
+    byDate.set(date, price);
+  }
+  return Array.from(byDate.entries())
+    .map(([date, close]) => ({ date, close: Math.round(close * 100) / 100 }))
+    .sort((a, b) => a.date.localeCompare(b.date));
 }
 
 // Binance kline: [openTime, open, high, low, close, volume, closeTime, ...]
@@ -176,26 +189,42 @@ async function main() {
     );
   }
 
-  // Step 2: Binance for 2017-08-17 to today (accurate daily close)
-  console.log("Fetching from Binance (daily close candles)...");
+  // Step 2: Fetch recent data — try Binance first, fall back to CoinGecko
+  // (Binance blocks US IPs used by GitHub Actions)
   const lastCachedDate = existing.length > 0 && !forceRefresh
     ? existing[existing.length - 1].date
     : null;
 
+  let recentEntries = [];
+
   let binanceStartDate = binanceStart;
   if (lastCachedDate && lastCachedDate >= binanceStart && !forceRefresh) {
-    // Only fetch new data from Binance since last cache
     binanceStartDate = lastCachedDate;
   }
 
-  const binanceEntries = await fetchBinanceChunks(binanceStartDate, today);
+  try {
+    console.log("Fetching from Binance (daily close candles)...");
+    recentEntries = await fetchBinanceChunks(binanceStartDate, today);
+  } catch (err) {
+    console.warn(`Binance failed (${err.message}), falling back to CoinGecko...`);
+    try {
+      const cgUrl = `${COINGECKO_URL}?vs_currency=usd&days=30&interval=daily`;
+      const cgData = await fetchWithRetry(cgUrl);
+      if (cgData.prices?.length > 0) {
+        recentEntries = parseCoinGeckoData(cgData.prices);
+        console.log(`  Got ${recentEntries.length} days from CoinGecko`);
+      }
+    } catch (cgErr) {
+      console.error(`CoinGecko also failed: ${cgErr.message}`);
+    }
+  }
 
-  // Step 3: Merge — Binance takes priority over everything for overlapping dates
+  // Step 3: Merge — recent data takes priority over everything for overlapping dates
   let merged;
   if (forceRefresh || existing.length === 0) {
-    merged = mergeWithPriority(blockchainEntries, binanceEntries);
+    merged = mergeWithPriority(blockchainEntries, recentEntries);
   } else {
-    merged = mergeWithPriority(existing, binanceEntries);
+    merged = mergeWithPriority(existing, recentEntries);
   }
 
   merged = merged.filter((e) => e.date <= today);
