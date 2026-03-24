@@ -1,4 +1,3 @@
-import { CYCLES, MIDTERM_YEARS } from "./config.js";
 import {
   loadPriceData,
   buildCycles,
@@ -9,47 +8,46 @@ import { computeStats } from "./stats.js";
 import { createChart } from "./chart.js";
 import { setupControls } from "./controls.js";
 
-const RANGE_CONFIG = {
-  "top-to-bottom": {
-    title: "Bitcoin Bear Market: Top \u2192 Bottom",
-    xLabel: "Days From ATH",
-    pctValueKey: "drawdownPct",
-    pctYLabel: "% Drawdown From ATH",
-    normYLabel: "Price / ATH",
-  },
-  "bottom-to-top": {
-    title: "Bitcoin Bull Market: Bottom \u2192 Top",
-    xLabel: "Days From Cycle Bottom",
-    pctValueKey: "gainPct",
-    pctYLabel: "% Gain From Bottom",
-    normYLabel: "Multiple From Bottom",
-  },
-  "full-run": {
-    title: "Bitcoin Full Cycle: ATH \u2192 ATH",
-    xLabel: "Days From ATH",
-    pctValueKey: "drawdownPct",
-    pctYLabel: "% Drawdown From ATH",
-    normYLabel: "Price / ATH",
-  },
-};
+export async function initPage({ coinName, coinSymbol, dataFile, cycles: cyclesConfig, midtermYears: midtermYearsConfig }) {
+  const RANGE_CONFIG = {
+    "top-to-bottom": {
+      title: `${coinName} Bear Market: Top \u2192 Bottom`,
+      xLabel: "Days From ATH",
+      pctValueKey: "drawdownPct",
+      pctYLabel: "% Drawdown From ATH",
+      normYLabel: "Price / ATH",
+    },
+    "bottom-to-top": {
+      title: `${coinName} Bull Market: Bottom \u2192 Top`,
+      xLabel: "Days From Cycle Bottom",
+      pctValueKey: "gainPct",
+      pctYLabel: "% Gain From Bottom",
+      normYLabel: "Multiple From Bottom",
+    },
+    "full-run": {
+      title: `${coinName} Full Cycle: ATH \u2192 ATH`,
+      xLabel: "Days From ATH",
+      pctValueKey: "drawdownPct",
+      pctYLabel: "% Drawdown From ATH",
+      normYLabel: "Price / ATH",
+    },
+  };
 
-async function init() {
-  const prices = await loadPriceData();
-  const allCycles = buildCycles(prices);
-  const midtermCycles = buildMidtermCycles(prices);
+  const prices = await loadPriceData(dataFile);
+  const allCycles = buildCycles(prices, cyclesConfig);
+  const midtermCycles = buildMidtermCycles(prices, midtermYearsConfig);
 
   // Set initial visibility
   for (const c of allCycles) {
-    c.visible = CYCLES.find((cfg) => cfg.name === c.name).visibleByDefault;
+    c.visible = cyclesConfig.find((cfg) => cfg.name === c.name).visibleByDefault;
   }
   for (const c of midtermCycles) {
-    c.visible =
-      MIDTERM_YEARS.find((cfg) => cfg.name === c.name).visibleByDefault;
+    c.visible = midtermYearsConfig.find((cfg) => cfg.name === c.name).visibleByDefault;
   }
 
   // Main cycle chart
   const chart = createChart("chart", {
-    title: "Bitcoin Bear Market: Top \u2192 Bottom",
+    title: `${coinName} Bear Market: Top \u2192 Bottom`,
     xLabel: "Days From ATH",
   });
 
@@ -179,11 +177,3 @@ async function init() {
   renderChart();
   renderMidterm();
 }
-
-init().catch((err) => {
-  console.error("Failed to initialize:", err);
-  const errEl = document.createElement("p");
-  errEl.style.cssText = "color:red;padding:20px;";
-  errEl.textContent = `Error loading chart: ${err.message}. Make sure to run "node fetch-data.js" first and serve via HTTP.`;
-  document.body.appendChild(errEl);
-});

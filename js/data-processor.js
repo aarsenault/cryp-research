@@ -1,7 +1,5 @@
-import { CYCLES, MIDTERM_YEARS } from "./config.js";
-
-export async function loadPriceData() {
-  const res = await fetch("data/btc-daily.json");
+export async function loadPriceData(dataFile) {
+  const res = await fetch(dataFile);
   if (!res.ok) throw new Error(`Failed to load data: ${res.status}`);
   const data = await res.json();
   return data.map((d) => ({ date: d.date, close: d.close }));
@@ -35,17 +33,17 @@ function findRecoveryIndex(prices, athIndex, athPrice, maxIndex) {
 }
 
 // Build cycle data with all segments pre-computed for each range mode
-export function buildCycles(prices) {
+export function buildCycles(prices, cyclesConfig) {
   const cycles = [];
-  for (let i = 0; i < CYCLES.length; i++) {
-    const cycle = CYCLES[i];
+  for (let i = 0; i < cyclesConfig.length; i++) {
+    const cycle = cyclesConfig[i];
     const athIndex = findDateIndex(prices, cycle.athDate);
     const athPrice = prices[athIndex].close;
 
     // Max boundary: next cycle's ATH or end of data
     let maxIndex;
-    if (i < CYCLES.length - 1) {
-      maxIndex = findDateIndex(prices, CYCLES[i + 1].athDate);
+    if (i < cyclesConfig.length - 1) {
+      maxIndex = findDateIndex(prices, cyclesConfig[i + 1].athDate);
     } else {
       maxIndex = prices.length - 1;
     }
@@ -59,7 +57,7 @@ export function buildCycles(prices) {
 
     // Pre-compute points for each range mode:
 
-    // "top-to-bottom": ATH → cycle bottom (current cycle extends to today)
+    // "top-to-bottom": ATH -> cycle bottom (current cycle extends to today)
     const ttbEnd = cycle.isCurrent ? maxIndex : bottomIndex;
     const topToBottom = [];
     for (let j = athIndex; j <= ttbEnd; j++) {
@@ -73,7 +71,7 @@ export function buildCycles(prices) {
       });
     }
 
-    // "bottom-to-top": bottom → recovery to ATH (or next ATH / current)
+    // "bottom-to-top": bottom -> recovery to ATH (or next ATH / current)
     const bottomToTop = [];
     const btEnd = cycle.isCurrent ? maxIndex : recoveryIndex;
     for (let j = bottomIndex; j <= btEnd; j++) {
@@ -87,7 +85,7 @@ export function buildCycles(prices) {
       });
     }
 
-    // "full-run": ATH → next ATH (full cycle)
+    // "full-run": ATH -> next ATH (full cycle)
     const fullRun = [];
     for (let j = athIndex; j <= maxIndex; j++) {
       const day = j - athIndex;
@@ -119,9 +117,9 @@ export function buildCycles(prices) {
 }
 
 // Build midterm year cycles: drawdown from Jan 1 of each midterm year
-export function buildMidtermCycles(prices) {
+export function buildMidtermCycles(prices, midtermYearsConfig) {
   const cycles = [];
-  for (const mt of MIDTERM_YEARS) {
+  for (const mt of midtermYearsConfig) {
     const startIndex = findDateIndex(prices, mt.startDate);
     const startPrice = prices[startIndex].close;
 

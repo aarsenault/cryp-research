@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>BTC Cycle Comparison</title>
+  <title>XRP Cycle Comparison</title>
   <script src="https://d3js.org/d3.v7.min.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -147,7 +147,6 @@
       max-width: 280px;
     }
 
-    /* Brush styling */
     .brush .selection {
       fill: rgba(100, 100, 255, 0.2);
       stroke: rgba(100, 100, 255, 0.5);
@@ -158,13 +157,13 @@
 </head>
 <body>
   <nav class="coin-tabs">
-    <a href="index.html" class="tab active">BTC</a>
+    <a href="index.html" class="tab">BTC</a>
     <a href="eth.html" class="tab">ETH</a>
     <a href="sol.html" class="tab">SOL</a>
-    <a href="xrp.html" class="tab">XRP</a>
+    <a href="xrp.html" class="tab active">XRP</a>
   </nav>
 
-  <h1>Bitcoin Cycle Comparison</h1>
+  <h1>XRP Cycle Comparison</h1>
 
   <div class="controls">
     <button id="range-toggle">Range: Top &rarr; Bottom</button>
@@ -184,6 +183,6 @@
   <div class="zoom-hint">Drag to zoom &middot; Double-click to reset</div>
   <div id="midterm-chart" class="chart-container"></div>
 
-  <script type="module" src="js/btc-main.js"></script>
+  <script type="module" src="js/xrp-main.js"></script>
 </body>
 </html>

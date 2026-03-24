@@ -1,16 +1,44 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
 
 const DATA_DIR = "data";
-const DATA_FILE = `${DATA_DIR}/btc-daily.json`;
 const BINANCE_URL = "https://api.binance.com/api/v3/klines";
 const BLOCKCHAIN_URL = "https://api.blockchain.info/charts/market-price";
-const COINGECKO_URL =
-  "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart";
+const COINGECKO_URL = "https://api.coingecko.com/api/v3/coins";
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 2000;
 const CHUNK_DELAY_MS = 500;
-// Binance max 1000 candles per request = ~2.7 years of daily data
 const BINANCE_CHUNK_DAYS = 1000;
+
+const COINS = {
+  btc: {
+    symbol: "BTCUSDT",
+    geckoId: "bitcoin",
+    binanceStart: "2017-08-17",
+    hasPreBinanceData: true,
+    dataFile: `${DATA_DIR}/btc-daily.json`,
+  },
+  eth: {
+    symbol: "ETHUSDT",
+    geckoId: "ethereum",
+    binanceStart: "2017-11-20",
+    hasPreBinanceData: false,
+    dataFile: `${DATA_DIR}/eth-daily.json`,
+  },
+  sol: {
+    symbol: "SOLUSDT",
+    geckoId: "solana",
+    binanceStart: "2020-09-14",
+    hasPreBinanceData: false,
+    dataFile: `${DATA_DIR}/sol-daily.json`,
+  },
+  xrp: {
+    symbol: "XRPUSDT",
+    geckoId: "ripple",
+    binanceStart: "2018-05-04",
+    hasPreBinanceData: false,
+    dataFile: `${DATA_DIR}/xrp-daily.json`,
+  },
+};
 
 async function fetchWithRetry(url, retries = MAX_RETRIES) {
   for (let i = 0; i < retries; i++) {
@@ -46,7 +74,6 @@ function parseCoinGeckoData(prices) {
     .sort((a, b) => a.date.localeCompare(b.date));
 }
 
-// Binance kline: [openTime, open, high, low, close, volume, closeTime, ...]
 function parseBinanceKlines(klines) {
   return klines.map((k) => ({
     date: toUTCDate(k[0]),
@@ -61,8 +88,7 @@ function parseBlockchainData(values) {
   }));
 }
 
-// Fetch daily candles from Binance in chunks (max 1000 per request)
-async function fetchBinanceChunks(startDate, endDate) {
+async function fetchBinanceChunks(symbol, startDate, endDate) {
   const allEntries = [];
   let currentMs = new Date(startDate + "T00:00:00Z").getTime();
   const endMs = new Date(endDate + "T23:59:59Z").getTime();
@@ -73,14 +99,13 @@ async function fetchBinanceChunks(startDate, endDate) {
     const fromDate = toUTCDate(currentMs);
     console.log(`  Binance chunk ${chunkNum}: from ${fromDate}...`);
 
-    const url = `${BINANCE_URL}?symbol=BTCUSDT&interval=1d&startTime=${currentMs}&limit=${BINANCE_CHUNK_DAYS}`;
+    const url = `${BINANCE_URL}?symbol=${symbol}&interval=1d&startTime=${currentMs}&limit=${BINANCE_CHUNK_DAYS}`;
     const data = await fetchWithRetry(url);
 
     if (Array.isArray(data) && data.length > 0) {
       const entries = parseBinanceKlines(data);
       allEntries.push(...entries);
       console.log(`    Got ${entries.length} daily candles`);
-      // Move past the last candle
       currentMs = data[data.length - 1][0] + 86400000;
     } else {
       break;
@@ -94,7 +119,6 @@ async function fetchBinanceChunks(startDate, endDate) {
   return allEntries;
 }
 
-// Blockchain.info for pre-Binance data (before ~2017)
 async function fetchBlockchainChunks(startDate, endDate) {
   const allEntries = [];
   let currentYear = new Date(startDate + "T00:00:00Z").getUTCFullYear();
@@ -137,27 +161,27 @@ function mergeWithPriority(base, priority) {
   );
 }
 
-function checkGaps(entries) {
+function checkGaps(entries, coinName) {
   for (let i = 1; i < entries.length; i++) {
     const diffDays =
       (new Date(entries[i].date) - new Date(entries[i - 1].date)) / 86400000;
     if (diffDays > 3) {
       console.warn(
-        `Warning: ${diffDays}-day gap between ${entries[i - 1].date} and ${entries[i].date}`,
+        `Warning [${coinName}]: ${diffDays}-day gap between ${entries[i - 1].date} and ${entries[i].date}`,
       );
     }
   }
 }
 
-async function main() {
-  mkdirSync(DATA_DIR, { recursive: true });
+async function fetchCoin(coinKey, forceRefresh) {
+  const coin = COINS[coinKey];
+  console.log(`\n=== Fetching ${coinKey.toUpperCase()} (${coin.symbol}) ===`);
 
-  const forceRefresh = process.argv.includes("--force");
   let existing = [];
 
-  if (!forceRefresh && existsSync(DATA_FILE)) {
+  if (!forceRefresh && existsSync(coin.dataFile)) {
     try {
-      existing = JSON.parse(readFileSync(DATA_FILE, "utf-8"));
+      existing = JSON.parse(readFileSync(coin.dataFile, "utf-8"));
       if (existing.length > 0) {
         console.log(
           `Cache has ${existing.length} entries, last: ${existing[existing.length - 1].date}`,
@@ -175,40 +199,36 @@ async function main() {
 
   const today = new Date().toISOString().split("T")[0];
 
-  // Binance BTCUSDT starts around 2017-08-17
-  const binanceStart = "2017-08-17";
-
-  // Step 1: Pre-Binance data from blockchain.info (2011 - 2017-08-16)
+  // Step 1: Pre-Binance data (BTC only)
   let blockchainEntries = [];
-  const needOldData = forceRefresh || existing.length === 0;
+  const needOldData = coin.hasPreBinanceData && (forceRefresh || existing.length === 0);
   if (needOldData) {
     console.log("Fetching pre-2017 data from blockchain.info...");
     blockchainEntries = await fetchBlockchainChunks("2011-01-01", "2017-08-16");
     blockchainEntries = blockchainEntries.filter(
-      (e) => e.date < binanceStart,
+      (e) => e.date < coin.binanceStart,
     );
   }
 
-  // Step 2: Fetch recent data — try Binance first, fall back to CoinGecko
-  // (Binance blocks US IPs used by GitHub Actions)
+  // Step 2: Fetch recent data -- try Binance first, fall back to CoinGecko
   const lastCachedDate = existing.length > 0 && !forceRefresh
     ? existing[existing.length - 1].date
     : null;
 
   let recentEntries = [];
 
-  let binanceStartDate = binanceStart;
-  if (lastCachedDate && lastCachedDate >= binanceStart && !forceRefresh) {
+  let binanceStartDate = coin.binanceStart;
+  if (lastCachedDate && lastCachedDate >= coin.binanceStart && !forceRefresh) {
     binanceStartDate = lastCachedDate;
   }
 
   try {
     console.log("Fetching from Binance (daily close candles)...");
-    recentEntries = await fetchBinanceChunks(binanceStartDate, today);
+    recentEntries = await fetchBinanceChunks(coin.symbol, binanceStartDate, today);
   } catch (err) {
     console.warn(`Binance failed (${err.message}), falling back to CoinGecko...`);
     try {
-      const cgUrl = `${COINGECKO_URL}?vs_currency=usd&days=30&interval=daily`;
+      const cgUrl = `${COINGECKO_URL}/${coin.geckoId}/market_chart?vs_currency=usd&days=30&interval=daily`;
       const cgData = await fetchWithRetry(cgUrl);
       if (cgData.prices?.length > 0) {
         recentEntries = parseCoinGeckoData(cgData.prices);
@@ -219,7 +239,7 @@ async function main() {
     }
   }
 
-  // Step 3: Merge — recent data takes priority over everything for overlapping dates
+  // Step 3: Merge
   let merged;
   if (forceRefresh || existing.length === 0) {
     merged = mergeWithPriority(blockchainEntries, recentEntries);
@@ -230,14 +250,38 @@ async function main() {
   merged = merged.filter((e) => e.date <= today);
 
   if (merged.length === 0) {
-    console.log("No data available.");
+    console.log(`No data available for ${coinKey.toUpperCase()}.`);
     return;
   }
 
-  checkGaps(merged);
+  checkGaps(merged, coinKey.toUpperCase());
 
-  writeFileSync(DATA_FILE, JSON.stringify(merged, null, 2));
-  console.log(`Wrote ${merged.length} total entries to ${DATA_FILE}`);
+  writeFileSync(coin.dataFile, JSON.stringify(merged, null, 2));
+  console.log(`Wrote ${merged.length} total entries to ${coin.dataFile}`);
+}
+
+async function main() {
+  mkdirSync(DATA_DIR, { recursive: true });
+
+  const forceRefresh = process.argv.includes("--force");
+
+  // Parse --coin argument
+  const coinArgIndex = process.argv.indexOf("--coin");
+  let coinsToFetch;
+  if (coinArgIndex !== -1 && process.argv[coinArgIndex + 1]) {
+    const coinKey = process.argv[coinArgIndex + 1].toLowerCase();
+    if (!COINS[coinKey]) {
+      console.error(`Unknown coin: ${coinKey}. Available: ${Object.keys(COINS).join(", ")}`);
+      process.exit(1);
+    }
+    coinsToFetch = [coinKey];
+  } else {
+    coinsToFetch = Object.keys(COINS);
+  }
+
+  for (const coinKey of coinsToFetch) {
+    await fetchCoin(coinKey, forceRefresh);
+  }
 }
 
 main().catch((err) => {
