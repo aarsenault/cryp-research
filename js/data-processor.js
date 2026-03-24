@@ -1,4 +1,4 @@
-import { CYCLES } from "./config.js";
+import { CYCLES, MIDTERM_YEARS } from "./config.js";
 
 export async function loadPriceData() {
   const res = await fetch("data/btc-daily.json");
@@ -113,6 +113,49 @@ export function buildCycles(prices) {
       bottomToTop,
       fullRun,
       isComplete: !cycle.isCurrent,
+    });
+  }
+  return cycles;
+}
+
+// Build midterm year cycles: drawdown from Jan 1 of each midterm year
+export function buildMidtermCycles(prices) {
+  const cycles = [];
+  for (const mt of MIDTERM_YEARS) {
+    const startIndex = findDateIndex(prices, mt.startDate);
+    const startPrice = prices[startIndex].close;
+
+    // End: Dec 31 of same year, or end of data for current year
+    const year = parseInt(mt.name);
+    const endDate = `${year}-12-31`;
+    let endIndex;
+    if (mt.isCurrent) {
+      endIndex = prices.length - 1;
+    } else {
+      endIndex = findDateIndex(prices, endDate);
+      // Make sure we don't go past Dec 31
+      if (prices[endIndex].date > endDate) endIndex = Math.max(startIndex, endIndex - 1);
+    }
+
+    const points = [];
+    for (let j = startIndex; j <= endIndex; j++) {
+      const day = j - startIndex;
+      points.push({
+        day,
+        drawdownPct: ((prices[j].close - startPrice) / startPrice) * 100,
+        normalized: prices[j].close / startPrice,
+        price: prices[j].close,
+        date: prices[j].date,
+      });
+    }
+
+    cycles.push({
+      ...mt,
+      startPrice,
+      startIndex,
+      endIndex,
+      points,
+      isComplete: !mt.isCurrent,
     });
   }
   return cycles;

@@ -1,5 +1,10 @@
-import { CYCLES } from "./config.js";
-import { loadPriceData, buildCycles, getCyclePoints } from "./data-processor.js";
+import { CYCLES, MIDTERM_YEARS } from "./config.js";
+import {
+  loadPriceData,
+  buildCycles,
+  buildMidtermCycles,
+  getCyclePoints,
+} from "./data-processor.js";
 import { computeStats } from "./stats.js";
 import { createChart } from "./chart.js";
 import { setupControls } from "./controls.js";
@@ -31,15 +36,27 @@ const RANGE_CONFIG = {
 async function init() {
   const prices = await loadPriceData();
   const allCycles = buildCycles(prices);
+  const midtermCycles = buildMidtermCycles(prices);
 
   // Set initial visibility
   for (const c of allCycles) {
     c.visible = CYCLES.find((cfg) => cfg.name === c.name).visibleByDefault;
   }
+  for (const c of midtermCycles) {
+    c.visible =
+      MIDTERM_YEARS.find((cfg) => cfg.name === c.name).visibleByDefault;
+  }
 
+  // Main cycle chart
   const chart = createChart("chart", {
     title: "Bitcoin Bear Market: Top \u2192 Bottom",
     xLabel: "Days From ATH",
+  });
+
+  // Midterm year chart
+  const midtermChart = createChart("midterm-chart", {
+    title: "Midterm Year Drawdown From Jan 1",
+    xLabel: "Days From Jan 1",
   });
 
   let currentMode = "percentage";
@@ -50,7 +67,6 @@ async function init() {
   function renderChart() {
     const cfg = RANGE_CONFIG[rangeMode];
 
-    // Set active points on each cycle based on range mode
     for (const c of allCycles) {
       c.points = getCyclePoints(c, rangeMode);
     }
@@ -73,7 +89,6 @@ async function init() {
     }
 
     const yLabel = useNormalized ? cfg.normYLabel : cfg.pctYLabel;
-
     const stats = computeStats(allCycles, valueKey);
 
     chart.updateTitle(cfg.title);
@@ -88,16 +103,67 @@ async function init() {
     chart.showSD(currentSDLevel);
   }
 
+  function renderMidterm() {
+    const useNormalized = currentMode === "normalized";
+    const valueKey = useNormalized ? "normalized" : "drawdownPct";
+    const formatValue = useNormalized
+      ? (v) => v.toFixed(3)
+      : (v) => `${v.toFixed(1)}%`;
+    const yLabel = useNormalized
+      ? "Price / Jan 1 Price"
+      : "% Change From Jan 1";
+
+    const stats = computeStats(midtermCycles, valueKey);
+
+    midtermChart.render(midtermCycles, stats, {
+      valueKey,
+      formatValue,
+      yLabel,
+      logScale: false,
+    });
+    midtermChart.showSD(currentSDLevel);
+  }
+
+  // Build midterm legend
+  const midLegendEl = document.getElementById("midterm-legend");
+  for (const cycle of midtermCycles) {
+    const item = document.createElement("div");
+    item.className = `legend-item${cycle.visible ? "" : " hidden"}`;
+
+    const swatch = document.createElement("span");
+    swatch.className = "legend-swatch";
+    swatch.style.background = cycle.color;
+    item.appendChild(swatch);
+
+    const label = document.createElement("span");
+    label.className = "legend-label";
+    label.textContent = cycle.isCurrent
+      ? `${cycle.name} (current)`
+      : cycle.name;
+    item.appendChild(label);
+
+    item.addEventListener("click", () => {
+      cycle.visible = !cycle.visible;
+      item.classList.toggle("hidden", !cycle.visible);
+      renderMidterm();
+    });
+    midLegendEl.appendChild(item);
+  }
+
   setupControls({
     cycles: allCycles,
-    onToggleCycle: () => renderChart(),
+    onToggleCycle: () => {
+      renderChart();
+    },
     onToggleMode: (mode) => {
       currentMode = mode;
       renderChart();
+      renderMidterm();
     },
     onToggleSD: (level) => {
       currentSDLevel = level;
       chart.showSD(level);
+      midtermChart.showSD(level);
     },
     onToggleLog: (on) => {
       logScale = on;
@@ -111,6 +177,7 @@ async function init() {
   });
 
   renderChart();
+  renderMidterm();
 }
 
 init().catch((err) => {
